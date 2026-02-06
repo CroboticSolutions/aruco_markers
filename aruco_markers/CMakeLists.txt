@@ -24,6 +24,7 @@ target_include_directories(aruco_markers_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${OpenCV_INCLUDE_DIRS}
+  $<TARGET_PROPERTY:cv_bridge::cv_bridge,INTERFACE_INCLUDE_DIRECTORIES>
 )
 ament_target_dependencies(aruco_markers_lib
   rclcpp

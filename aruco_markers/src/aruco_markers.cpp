@@ -123,7 +123,7 @@ void ArucoMarkersNode::image_callback(const sensor_msgs::msg::Image::ConstShared
     cv::Mat dist_coeffs = cv::Mat::zeros(4, 1, CV_64F);
     cv::aruco::detectMarkers(
       image, aruco_dict_, marker_corners, marker_ids, aruco_parameters_,
-      rejected_candidates, camera_matrix_, camera_distortion_);
+      rejected_candidates);
 
     if (!marker_ids.empty()) {
       // Estimate the pose of the ArUco markers (using solvePnP)
@@ -199,10 +199,10 @@ void ArucoMarkersNode::image_callback(const sensor_msgs::msg::Image::ConstShared
         // Add marker to array
         marker_array.markers.push_back(marker);
 
-        // Draw 3D axis on the marker in the image
-        cv::aruco::drawAxis(
+        // Draw 3D axis on the marker in the image (OpenCV 4+ uses calib3d::drawFrameAxes)
+        cv::drawFrameAxes(
           image, camera_matrix_, camera_distortion_, rvec, tvec,
-          marker_size_ * 0.7f);
+          marker_size_ * 0.7f, 3);
         draw3dAxis(image, tvec, rvec, 1);
       }
 
