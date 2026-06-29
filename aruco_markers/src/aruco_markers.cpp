@@ -5,7 +5,10 @@
 using namespace aruco_markers;
 
 ArucoMarkersNode::ArucoMarkersNode()
-: Node("aruco_markers"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_)
+: Node("aruco_markers"),
+  received_camera_info_(false),
+  tf_buffer_(this->get_clock()),
+  tf_listener_(tf_buffer_)
 {
   this->declare_parameter("marker_size", 0.1);
   this->declare_parameter("camera_frame", "camera_rgb_optical_frame");
@@ -30,12 +33,6 @@ void ArucoMarkersNode::initialize()
 {
   RCLCPP_INFO(this->get_logger(), "Initializing.");
 
-  // Image transport subscriber
-  it_ = std::make_unique<image_transport::ImageTransport>(shared_from_this());
-  image_subscriber_ = it_->subscribe(
-    image_topic_, 1,
-    std::bind(&ArucoMarkersNode::image_callback, this, std::placeholders::_1));
-
   // Publisher for marker information
   marker_info_publisher_ = this->create_publisher<std_msgs::msg::String>("aruco_marker_info", 10);
   marker_array_pub_ = this->create_publisher<aruco_markers_msgs::msg::MarkerArray>(
@@ -53,15 +50,83 @@ void ArucoMarkersNode::initialize()
 
   RCLCPP_INFO(this->get_logger(), "Waiting for camera info.");
   sensor_msgs::msg::CameraInfo camera_info;
-  rclcpp::wait_for_message<sensor_msgs::msg::CameraInfo>(
-    camera_info,
-    shared_from_this(), camera_info_topic_);
+  if (!wait_for_camera_info(camera_info)) {
+    RCLCPP_ERROR(
+      this->get_logger(), "No camera info received. ArUco detection cannot start.");
+    return;
+  }
   RCLCPP_INFO(this->get_logger(), "Camera info received.");
   process_camera_info(camera_info);
+
+  // Image transport subscriber
+  it_ = std::make_unique<image_transport::ImageTransport>(shared_from_this());
+  image_subscriber_ = it_->subscribe(
+    image_topic_, 1,
+    std::bind(&ArucoMarkersNode::image_callback, this, std::placeholders::_1));
+}
+
+std::vector<std::pair<std::string, std::string>> ArucoMarkersNode::camera_topic_candidates() const
+{
+  std::vector<std::pair<std::string, std::string>> candidates = {
+    {image_topic_, camera_info_topic_},
+  };
+
+  const auto right_image = std::string("/right/image_raw");
+  const auto right_info = std::string("/right/camera_info");
+  const auto image_pos = image_topic_.find(right_image);
+  const auto info_pos = camera_info_topic_.find(right_info);
+  if (image_pos != std::string::npos && info_pos != std::string::npos) {
+    auto rgb_image = image_topic_;
+    auto rgb_info = camera_info_topic_;
+    rgb_image.replace(image_pos, right_image.size(), "/rgb/image_raw");
+    rgb_info.replace(info_pos, right_info.size(), "/rgb/camera_info");
+    candidates.push_back({rgb_image, rgb_info});
+
+    auto stereo_image = image_topic_;
+    auto stereo_info = camera_info_topic_;
+    stereo_image.replace(image_pos, right_image.size(), "/stereo/image_raw");
+    stereo_info.replace(info_pos, right_info.size(), "/stereo/camera_info");
+    candidates.push_back({stereo_image, stereo_info});
+  }
+
+  return candidates;
+}
+
+bool ArucoMarkersNode::wait_for_camera_info(sensor_msgs::msg::CameraInfo & camera_info)
+{
+  for (const auto & candidate : camera_topic_candidates()) {
+    const auto & candidate_image_topic = candidate.first;
+    const auto & candidate_camera_info_topic = candidate.second;
+
+    RCLCPP_INFO(
+      this->get_logger(), "Trying camera info topic: %s",
+      candidate_camera_info_topic.c_str());
+    if (rclcpp::wait_for_message<sensor_msgs::msg::CameraInfo>(
+        camera_info, shared_from_this(), candidate_camera_info_topic, 2s))
+    {
+      image_topic_ = candidate_image_topic;
+      camera_info_topic_ = candidate_camera_info_topic;
+      RCLCPP_INFO(this->get_logger(), "Using image_topic: %s", image_topic_.c_str());
+      RCLCPP_INFO(
+        this->get_logger(), "Using camera_info_topic: %s",
+        camera_info_topic_.c_str());
+      return true;
+    }
+  }
+
+  return false;
 }
 
 void ArucoMarkersNode::process_camera_info(const sensor_msgs::msg::CameraInfo & msg)
 {
+  if (!msg.header.frame_id.empty() && msg.header.frame_id != camera_frame_) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "camera_frame '%s' differs from CameraInfo frame_id '%s'; using CameraInfo frame.",
+      camera_frame_.c_str(), msg.header.frame_id.c_str());
+    camera_frame_ = msg.header.frame_id;
+  }
+
   camera_matrix_ = cv::Mat(3, 3, CV_64F, (void *)msg.k.data()).clone();
   camera_distortion_ = cv::Mat::zeros(1, 4, CV_64F);
   if (!msg.d.empty()) {
@@ -72,6 +137,11 @@ void ArucoMarkersNode::process_camera_info(const sensor_msgs::msg::CameraInfo & 
   }
 
   if (!received_camera_info_) {
+    const auto d0 = msg.d.size() > 0 ? msg.d[0] : 0.0;
+    const auto d1 = msg.d.size() > 1 ? msg.d[1] : 0.0;
+    const auto d2 = msg.d.size() > 2 ? msg.d[2] : 0.0;
+    const auto d3 = msg.d.size() > 3 ? msg.d[3] : 0.0;
+    const auto d4 = msg.d.size() > 4 ? msg.d[4] : 0.0;
     RCLCPP_INFO(this->get_logger(), "Received camera info.");
     RCLCPP_INFO(
       this->get_logger(), "Camera Info:\n"
@@ -82,7 +152,7 @@ void ArucoMarkersNode::process_camera_info(const sensor_msgs::msg::CameraInfo & 
       msg.width,
       msg.height,
       msg.k[0], msg.k[1], msg.k[2], msg.k[3], msg.k[4], msg.k[5], msg.k[6], msg.k[7], msg.k[8],
-      msg.d[0], msg.d[1], msg.d[2], msg.d[3], msg.d[4]);
+      d0, d1, d2, d3, d4);
     received_camera_info_ = true;
   }
 }

@@ -21,6 +21,8 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -47,6 +49,8 @@ public:
   }
 
 private:
+  bool wait_for_camera_info(sensor_msgs::msg::CameraInfo & camera_info);
+  std::vector<std::pair<std::string, std::string>> camera_topic_candidates() const;
   void log_marker_ids(const std::vector<int> & ids);
   void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
   void logCvMat(const cv::Mat & mat, const std::string & name);
